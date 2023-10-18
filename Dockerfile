@@ -76,5 +76,5 @@ RUN cd /wine/python \
     && wine pip install pyinstaller[encryption]==5.13.2 pyarmor
 
 #RUN echo "$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd && ls)"
-ENTRYPOINT ["ps-empire"]
+ENTRYPOINT ["./ps-empire"]
 CMD ["server"]
