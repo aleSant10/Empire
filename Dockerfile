@@ -1,34 +1,26 @@
-# NOTE: Only use this when you want to build image locally
-#       else use `docker pull bcsecurity/empire:{VERSION}`
-#       all image versions can be found at: https://hub.docker.com/r/bcsecurity/empire/
+FROM python:3.11-bookworm
 
-# -----BUILD COMMANDS----
-# 1) build command: `docker build -t bcsecurity/empire .`
-# 2) create volume storage: `docker create -v /empire --name data bcsecurity/empire`
-# 3) run out container: `docker run -it --volumes-from data bcsecurity/empire /bin/bash`
+# env base for dotnet wine python
+ENV STAGING_KEY=RANDOM DEBIAN_FRONTEND=noninteractive DOTNET_CLI_TELEMETRY_OPTOUT=1 PYTHONOPTIMIZE=1
+ARG WINE_PYTHON_VERSION=3.11.6
+RUN dpkg --add-architecture i386
 
-# -----RELEASE COMMANDS----
-# Handled by GitHub Actions
+# update and add mandatory sw
+RUN  apt update \
+  && apt upgrade -y \
+  && apt install -y --no-install-recommends build-essential wget wine wine32:i386 \
+  && rm -rf /var/lib/apt/lists/*
 
-# -----BUILD ENTRY-----
+# install pip
+RUN pip install --upgrade pip
 
-# image base
-FROM python:3.11.4-bullseye
-
-# extra metadata
-LABEL maintainer="bc-security"
-LABEL description="Dockerfile for Empire server and client. https://bc-security.gitbook.io/empire-wiki/quickstart/installation#docker"
-
-# env setup
-ENV STAGING_KEY=RANDOM DEBIAN_FRONTEND=noninteractive DOTNET_CLI_TELEMETRY_OPTOUT=1
-
-# set the def shell for ENV
+# set the def shell for ENV & install microsoft sw
 SHELL ["/bin/bash", "-c"]
-
-RUN wget -q https://packages.microsoft.com/config/debian/10/packages-microsoft-prod.deb && \
+RUN wget -q https://packages.microsoft.com/config/debian/11/packages-microsoft-prod.deb && \
     dpkg -i packages-microsoft-prod.deb && \
-    apt-get update && \
-    apt-get install -qq \
+    rm packages-microsoft-prod.deb && \
+    apt update && \
+    apt install -qq -y \
     --no-install-recommends \
     apt-transport-https \
     dotnet-sdk-6.0 \
@@ -43,8 +35,8 @@ RUN wget -q https://packages.microsoft.com/config/debian/10/packages-microsoft-p
 
 WORKDIR /empire
 
+# copy install and run poetry
 COPY pyproject.toml poetry.lock /empire/
-
 RUN pip install poetry \
     --disable-pip-version-check && \
     poetry config virtualenvs.create false && \
@@ -52,12 +44,37 @@ RUN pip install poetry \
 
 COPY . /empire
 
+# sqlite and modules
 RUN sed -i 's/use: mysql/use: sqlite/g' empire/server/config.yaml
-
 RUN mkdir -p /usr/local/share/powershell/Modules && \
     cp -r ./empire/server/data/Invoke-Obfuscation /usr/local/share/powershell/Modules
-
 RUN rm -rf /empire/empire/server/data/empire*
 
-ENTRYPOINT ["./ps-empire"]
+# wine embed version
+RUN mkdir -p /wine/python
+RUN cd /wine/python \
+    && wget -q https://www.python.org/ftp/python/${WINE_PYTHON_VERSION}/python-${WINE_PYTHON_VERSION}-embed-win32.zip \
+    && unzip python-*.zip \
+    && rm -f python-*.zip
+
+# init wine
+ENV WINEPREFIX /wine
+ENV WINEPATH Z:\\wine\\python\\Scripts;Z:\\wine\\python
+ENV PYTHONHASHSEED=1337
+
+# install pip wine
+RUN cd /wine/python \
+  && rm python*._pth \
+  && wget https://bootstrap.pypa.io/get-pip.py
+
+# install wine python sw
+RUN wineboot --init
+RUN wineboot --restart
+RUN cd /wine/python \
+    && wine python --version \
+    && wine python get-pip.py \
+    && wine pip install pyinstaller[encryption]==5.13.2 pyarmor
+
+#RUN echo "$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd && ls)"
+ENTRYPOINT ["ps-empire"]
 CMD ["server"]
